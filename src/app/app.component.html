@@ -1,0 +1,94 @@
+<div #map id="map">
+  @if (loading()) {
+    <div class="loader">Загрузка данных карты...</div>
+  }
+
+  @switch (this.selectedGeometryType()) {
+    @case ('LineString') {
+      <div class="generation-form">
+        <h3>Генерация точек на линии</h3>
+        <form [formGroup]="generatePointsForm">
+          <div class="form-column">
+            <label>
+              Количество точек (не обязательно)
+              <input formControlName="count" type="text">
+            </label>
+            <label>
+              Расстояние между точками (в метрах)
+              <input formControlName="distance" type="text">
+            </label>
+            <label>
+              Генерировать с
+              <select formControlName="startGenerate">
+                <option value="start">Начала линии</option>
+                <option value="end">Конца линии</option>
+              </select>
+            </label>
+          </div>
+          <div class="form-column">
+            <label>
+              Отступ в начале (не обязательно) в метрах
+              <input formControlName="paddingStart" type="text">
+            </label>
+            <label>
+              Отступ в конце (не обязательно) в метрах
+              <input formControlName="paddingEnd" type="text">
+            </label>
+          </div>
+          <label class="checkbox-control">
+            <input formControlName="generateEndPoint" type="checkbox">
+            Генерировать точку в конце линии
+          </label>
+        </form>
+        <button (click)="generatePointsOnLine()">Сгенерировать точки</button>
+      </div>
+    }
+    @case ('Polygon') {
+      <div class="generation-form">
+        <h3>Генерация рядов в полигоне</h3>
+        <form [formGroup]="generateRowsForm">
+          <label>Шаг между рядами (в метрах)</label>
+          <input formControlName="step" type="number">
+          <label>Угол (в градусах)</label>
+          <input formControlName="angle" type="number">
+          <label>Масштаб (1 по умолчанию)</label>
+          <input formControlName="scale" type="number">
+
+          <div class="buttons">
+            <button type="button" (click)="resetRowsFormAndPreview()">Редактировать</button>
+            <button type="button" (click)="generateRows()">Сгенерировать</button>
+            <button type="button" (click)="saveRows()" [disabled]="!rowsPreview.length">Сохранить</button>
+          </div>>
+        </form>
+      </div>
+    }
+    @case ('MultiPolygon') {
+      <div class="generation-form">
+        <h3>Генерация рядов в мультиполигоне</h3>
+        <form [formGroup]="generateRowsForm">
+          <div class="form-column">
+            <label>
+              Шаг между рядами (в метрах)
+              <input formControlName="step" type="number" min="1">
+            </label>
+            <label>
+              Угол (в градусах)
+              <input formControlName="angle" type="number" min="0" max="360">
+            </label>
+            <label>
+              Масштаб (1 по умолчанию)
+              <input formControlName="scale" type="number" min="0.1" step="0.1">
+            </label>
+          </div>
+          <div class="buttons">
+            <button type="button" (click)="resetRowsFormAndPreview()">Редактировать</button>
+            <button type="button" (click)="generateRows()">Сгенерировать</button>
+            <button type="button" (click)="saveRows()" [disabled]="!rowsPreview.length">Сохранить</button>
+          </div>
+        </form>
+      </div>
+    }
+    @default {}
+  }
+</div>
+
