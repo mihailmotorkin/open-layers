@@ -1,0 +1,40 @@
+.generation-form {
+  position: absolute;
+  z-index: 1;
+  bottom: 25px;
+  right: 15px;
+  background: #fff;
+  padding: 10px;
+  border-radius: 6px;
+
+  form {
+    display: grid;
+    gap: 16px;
+  }
+
+  form > :last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
+
+  h3 {
+    margin: 0 0 10px 0;
+  }
+
+  label {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .form-column {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .checkbox-control {
+    display: flex;
+    flex-direction: row;
+    gap: 5px;
+  }
+}

@@ -1,0 +1,20 @@
+<div #map id="map">
+  @if (loading()) {
+    <div class="loader">Загрузка данных карты...</div>
+  }
+
+  @if (selectedGeometryType(); as selected) {
+    @if (selected.type === 'LineString') {
+      <app-points-generator
+        [map]="mapInstance"
+        [geometry]="selected.geometry"
+      ></app-points-generator>
+    } @else if (selected.type === 'Polygon' || 'MultiPolygon') {
+      <app-rows-generator
+        [map]="mapInstance"
+        [geometry]="selected.geometry"
+      ></app-rows-generator>
+    }
+  }
+
+</div>

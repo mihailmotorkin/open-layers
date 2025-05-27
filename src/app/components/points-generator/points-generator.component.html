@@ -1,0 +1,37 @@
+<div class="generation-form">
+  <h3>Генерация точек на линии</h3>
+  <form [formGroup]="generatePointsForm">
+    <div class="form-column">
+      <label>
+        Количество точек (не обязательно)
+        <input formControlName="count" type="text">
+      </label>
+      <label>
+        Расстояние между точками (в метрах)
+        <input formControlName="distance" type="text">
+      </label>
+      <label>
+        Генерировать с
+        <select formControlName="startGenerate">
+          <option value="start">Начала линии</option>
+          <option value="end">Конца линии</option>
+        </select>
+      </label>
+    </div>
+    <div class="form-column">
+      <label>
+        Отступ в начале (не обязательно) в метрах
+        <input formControlName="paddingStart" type="text">
+      </label>
+      <label>
+        Отступ в конце (не обязательно) в метрах
+        <input formControlName="paddingEnd" type="text">
+      </label>
+    </div>
+    <label class="checkbox-control">
+      <input formControlName="generateEndPoint" type="checkbox">
+      Генерировать точку в конце линии
+    </label>
+  </form>
+  <button (click)="generatePointsOnLine()">Сгенерировать точки</button>
+</div>

@@ -1,0 +1,24 @@
+<div class="generation-form">
+  <h3>Генерация рядов в мультиполигоне</h3>
+  <form [formGroup]="generateRowsForm">
+    <div class="form-column">
+      <label>
+        Шаг между рядами (в метрах)
+        <input formControlName="step" type="number" min="1">
+      </label>
+      <label>
+        Угол (в градусах)
+        <input formControlName="angle" type="number" min="0" max="360">
+      </label>
+      <label>
+        Масштаб (1 по умолчанию)
+        <input formControlName="scale" type="number" min="0.1" step="0.1">
+      </label>
+    </div>
+    <div class="buttons">
+      <button type="button" (click)="resetRowsFormAndPreview()">Редактировать</button>
+      <button type="button" (click)="generateRows()">Сгенерировать</button>
+      <button type="button" (click)="saveRows()" [disabled]="!rowsPreview.length">Сохранить</button>
+    </div>
+  </form>
+</div>
