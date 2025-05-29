@@ -10,6 +10,7 @@ import VectorSource from 'ol/source/Vector';
 import { Circle, Fill, Stroke, Style } from 'ol/style';
 import { Translate } from 'ol/interaction';
 import Collection from 'ol/Collection';
+import { GeoJSON } from 'ol/format';
 
 @Component({
   selector: 'app-rows-generator',
@@ -24,24 +25,21 @@ export class RowsGeneratorComponent {
   map = input<Map>();
   geometry = input<Geometry>();
 
-  rowsPreviewLayer: VectorLayer | null = null;
-  bboxPreviewLayer: VectorLayer | null = null;
-  handleLayer: VectorLayer | null = null;
-
-  handleTranslate: Translate | null = null;
-  handleFeature: Feature | null = null;
-  rowLineFeatures: Feature[] = [];
-
-  bboxFeature: Feature | null = null;
-  rowsPreview: any[] = [];
-  bboxPivot: [number, number] | null = null;
-  originalBboxPolygon: any = null;
-  originalLines: any[] = [];
-  previewAngle: number = 0;
-
+  private rowsPreviewLayer: VectorLayer | null = null;
+  private bboxPreviewLayer: VectorLayer | null = null;
+  private handleLayer: VectorLayer | null = null;
+  private handleTranslate: Translate | null = null;
+  private handleFeature: Feature | null = null;
+  private rowLineFeatures: Feature[] = [];
+  private bboxFeature: Feature<Polygon> | null = null;
+  private bboxPivot: [number, number] | null = null;
+  private originalBboxPolygon: any = null;
+  private originalLines: any[] = [];
+  private previewAngle: number = 0;
   private dragStartAngle: number | null = null;
   private dragStartPreviewAngle: number = 0;
   private rotateTimeout: any = null;
+  rowsPreview: any[] = [];
 
   generateRowsForm = new FormGroup({
     step: new FormControl<number>(10),
@@ -69,13 +67,25 @@ export class RowsGeneratorComponent {
     this.addHandleTranslate();
   }
 
-  // --- Вспомогательные методы ---
-
   private clearPreviewLayersAndInteractions() {
     if (this.rowsPreviewLayer) this.map()!.removeLayer(this.rowsPreviewLayer);
     if (this.bboxPreviewLayer) this.map()!.removeLayer(this.bboxPreviewLayer);
     if (this.handleLayer) this.map()!.removeLayer(this.handleLayer);
     if (this.handleTranslate) this.map()!.removeInteraction(this.handleTranslate);
+  }
+
+  private clearLayersAndInteractions(): void {
+    this.removeLayerOrInteraction(this.rowsPreviewLayer, 'layer');
+    this.rowsPreviewLayer = null;
+
+    this.removeLayerOrInteraction(this.bboxPreviewLayer, 'layer');
+    this.bboxPreviewLayer = null;
+
+    this.removeLayerOrInteraction(this.handleLayer, 'layer');
+    this.handleLayer = null;
+
+    this.removeLayerOrInteraction(this.handleTranslate, 'interaction');
+    this.handleTranslate = null;
   }
 
   private preparePreviewGeometry(angleOverride?: number) {
@@ -122,6 +132,10 @@ export class RowsGeneratorComponent {
     return {rotatedBboxPolygon, rotatedLines};
   }
 
+  private toLonLatCoordinates(coordinates: any[]): any[] {
+    return coordinates.map(coord => fromLonLat(coord));
+  }
+
   private createPreviewFeatures(rotatedBboxPolygon: any, rotatedLines: any[]) {
     const bboxCoords = rotatedBboxPolygon.geometry.coordinates[0];
     const handleCoord = bboxCoords[1];
@@ -129,7 +143,7 @@ export class RowsGeneratorComponent {
     this.bboxFeature = new Feature({
       geometry: new Polygon(
         rotatedBboxPolygon.geometry.coordinates.map((ring: any) =>
-          ring.map((coord: any) => fromLonLat(coord))
+          this.toLonLatCoordinates(ring)
         )
       )
     });
@@ -141,7 +155,7 @@ export class RowsGeneratorComponent {
 
     this.rowLineFeatures = rotatedLines.map(line =>
       new Feature({
-        geometry: new LineString(line.geometry.coordinates.map((c: any) => fromLonLat(c)))
+        geometry: new LineString(this.toLonLatCoordinates(line.geometry.coordinates))
       })
     );
   }
@@ -180,90 +194,95 @@ export class RowsGeneratorComponent {
     this.map()!.addLayer(this.rowsPreviewLayer);
   }
 
-  private addHandleTranslate() {
-    this.handleTranslate = new Translate({features: new Collection([this.handleFeature!].filter((f): f is Feature<Geometry> => !!f))});
+  private addHandleTranslate(): void {
+    this.handleTranslate = new Translate({
+      features: new Collection([this.handleFeature!].filter((f): f is Feature<Geometry> => !!f)),
+    });
     this.map()!.addInteraction(this.handleTranslate);
 
-    this.handleTranslate.on('translatestart', (evt) => {
-      const pivot3857 = fromLonLat(this.bboxPivot!);
-      const mouse3857 = evt.coordinate;
-      this.dragStartAngle = Math.atan2(mouse3857[1] - pivot3857[1], mouse3857[0] - pivot3857[0]);
-      this.dragStartPreviewAngle = this.previewAngle;
-    });
-
-    this.handleTranslate.on('translating', (evt) => {
-      if (this.rotateTimeout) return;
-      this.rotateTimeout = setTimeout(() => {
-        if (this.dragStartAngle === null) {
-          this.rotateTimeout = null;
-          return;
-        }
-        const pivot3857 = fromLonLat(this.bboxPivot!);
-        const mouse3857 = evt.coordinate;
-        const currentAngle = Math.atan2(mouse3857[1] - pivot3857[1], mouse3857[0] - pivot3857[0]);
-        let delta = (this.dragStartAngle - currentAngle) * 180 / Math.PI;
-        if (delta < 0) delta += 360;
-        const newAngle = this.dragStartPreviewAngle + delta;
-
-        this.previewAngle = newAngle;
-
-        const rotatedBboxPolygon = turf.transformRotate(this.originalBboxPolygon, newAngle, {pivot: this.bboxPivot ?? undefined});
-        const rotatedLines = this.originalLines.map(line => turf.transformRotate(line, newAngle, {pivot: this.bboxPivot ?? undefined}));
-        const bboxCoords = rotatedBboxPolygon.geometry.coordinates[0];
-        const handleCoord = bboxCoords[1];
-
-        this.bboxFeature!.setGeometry(new Polygon(
-          rotatedBboxPolygon.geometry.coordinates.map((ring: any) =>
-            ring.map((coord: any) => fromLonLat(coord))
-          )
-        ));
-        this.handleFeature!.setGeometry(new Point(fromLonLat(handleCoord)));
-        this.rowLineFeatures.forEach((f, i) => {
-          f.setGeometry(new LineString(rotatedLines[i].geometry.coordinates.map((c: any) => fromLonLat(c))));
-        });
-
-        this.rowsPreview = rotatedLines;
-        this.rotateTimeout = null;
-      }, 10);
-    });
-
-    this.handleTranslate.on('translateend', () => {
-      this.generateRowsForm.get('angle')?.setValue(Math.round(this.previewAngle));
-      this.dragStartAngle = null;
-    });
+    this.handleTranslate.on('translatestart', this.onTranslateStart.bind(this));
+    this.handleTranslate.on('translating', this.onTranslating.bind(this));
+    this.handleTranslate.on('translateend', this.onTranslateEnd.bind(this));
   }
 
-  // Очистка формы и предпросмотра
+  private onTranslateStart(evt: any): void {
+    const pivot3857 = fromLonLat(this.bboxPivot!);
+    const mouse3857 = evt.coordinate;
+    this.dragStartAngle = Math.atan2(mouse3857[1] - pivot3857[1], mouse3857[0] - pivot3857[0]);
+    this.dragStartPreviewAngle = this.previewAngle;
+  }
+
+  private onTranslating(evt: any): void {
+    if (this.rotateTimeout) return;
+
+    this.rotateTimeout = setTimeout(() => {
+      if (this.dragStartAngle === null) {
+        this.rotateTimeout = null;
+        return;
+      }
+
+      const pivot3857 = fromLonLat(this.bboxPivot!);
+      const mouse3857 = evt.coordinate;
+      const currentAngle = Math.atan2(mouse3857[1] - pivot3857[1], mouse3857[0] - pivot3857[0]);
+      let delta = (this.dragStartAngle - currentAngle) * 180 / Math.PI;
+      if (delta < 0) delta += 360;
+
+      const newAngle = this.dragStartPreviewAngle + delta;
+      this.previewAngle = newAngle;
+
+      this.updateRotatedGeometry(newAngle);
+      this.rotateTimeout = null;
+    }, 10);
+  }
+
+  private onTranslateEnd(): void {
+    this.generateRowsForm.get('angle')?.setValue(Math.round(this.previewAngle));
+    this.dragStartAngle = null;
+  }
+
+  private updateRotatedGeometry(newAngle: number): void {
+    const rotatedBboxPolygon = turf.transformRotate(this.originalBboxPolygon, newAngle, {
+      pivot: this.bboxPivot ?? undefined,
+    });
+    const rotatedLines = this.originalLines.map(line =>
+      turf.transformRotate(line, newAngle, { pivot: this.bboxPivot ?? undefined })
+    );
+
+    const bboxCoords = rotatedBboxPolygon.geometry.coordinates[0];
+    const handleCoord = bboxCoords[1];
+
+    this.bboxFeature!.setGeometry(
+      new Polygon(
+        rotatedBboxPolygon.geometry.coordinates.map((ring: any) =>
+          ring.map((coord: any) => fromLonLat(coord))
+        )
+      )
+    );
+    this.handleFeature!.setGeometry(new Point(fromLonLat(handleCoord)));
+    this.rowLineFeatures.forEach((f, i) => {
+      f.setGeometry(new LineString(rotatedLines[i].geometry.coordinates.map((c: any) => fromLonLat(c))));
+    });
+
+    this.rowsPreview = rotatedLines;
+  }
+
   resetRowsFormAndPreview() {
     this.generateRowsForm.reset({
       step: 10,
       angle: 0,
-      scale: 1
+      scale: 1,
     });
 
-    // Удаляем предпросмотр и ряды с карты
-    if (this.rowsPreviewLayer) {
-      this.map()!.removeLayer(this.rowsPreviewLayer);
-      this.rowsPreviewLayer = null;
-    }
-    if (this.bboxPreviewLayer) {
-      this.map()!.removeLayer(this.bboxPreviewLayer);
-      this.bboxPreviewLayer = null;
-    }
-    if (this.handleLayer) {
-      this.map()!.removeLayer(this.handleLayer);
-      this.handleLayer = null;
-    }
-    if (this.handleTranslate) {
-      this.map()!.removeInteraction(this.handleTranslate);
-      this.handleTranslate = null;
-    }
+    this.clearLayersAndInteractions();
 
-    // Удаляем все финальные (красные) ряды
     this.map()!.getLayers().getArray()
       .filter(l => l instanceof VectorLayer && l.get('name') === 'FinalRowsLayer')
       .forEach(l => this.map()!.removeLayer(l));
 
+    this.resetPreviewState();
+  }
+
+  private resetPreviewState () {
     this.bboxPivot = null;
     this.originalBboxPolygon = null;
     this.originalLines = [];
@@ -271,86 +290,27 @@ export class RowsGeneratorComponent {
     this.rowsPreview = [];
   }
 
-  // Кнопка "Сгенерировать"
   generateRows() {
-    // Удаляем старые предпросмотренные ряды
     if (this.rowsPreviewLayer) {
       this.map()!.removeLayer(this.rowsPreviewLayer);
       this.rowsPreviewLayer = null;
     }
-    // Генерируем новые ряды для выбранной геометрии
+
     this.previewRows();
   }
 
-  // Кнопка "Сохранить"
   saveRows() {
-    const geometry = this.geometry();
-    if (!geometry || !(geometry instanceof Polygon || geometry instanceof MultiPolygon)) return;
+    const polygon = this.validateGeometry();
+    if (!polygon) return;
 
-    const coords = this.getValidPolygonCoords(geometry);
-    if (!coords) {
-      alert('Нет корректных контуров');
-      return;
-    }
+    const resultSegments = this.clipRowsByPolygon(this.rowsPreview, polygon);
 
-    let pol: any;
-    if (geometry instanceof Polygon) {
-      pol = turf.polygon(coords as Coordinate[][]);
-    } else {
-      pol = turf.multiPolygon(coords as Coordinate[][][]);
-    }
-
-    // Обрезка рядов по полигону
-    const resultSegments: any[] = [];
-    this.rowsPreview.forEach(line => {
-      const split = turf.lineSplit(line, pol);
-
-      // Берём сегменты, которые полностью лежат внутри полигона
-      split.features.forEach(segment => {
-        const segmentLength = turf.length(segment, {units: 'meters'});
-        if (segmentLength > 0) {
-          const center = turf.along(segment, segmentLength / 2, {units: 'meters'});
-          if (turf.booleanPointInPolygon(center, pol)) {
-            resultSegments.push(segment);
-          }
-        }
-      });
-    });
-
-    // Удаление старых слоёв
-    if (this.rowsPreviewLayer) {
-      this.map()!.removeLayer(this.rowsPreviewLayer);
-      this.rowsPreviewLayer = null;
-    }
-    if (this.bboxPreviewLayer) {
-      this.map()!.removeLayer(this.bboxPreviewLayer);
-      this.bboxPreviewLayer = null;
-    }
-    if (this.handleLayer) {
-      this.map()!.removeLayer(this.handleLayer);
-      this.handleLayer = null;
-    }
-    if (this.handleTranslate) {
-      this.map()!.removeInteraction(this.handleTranslate);
-      this.handleTranslate = null;
-    }
-
-    // Сброс переменных предпросмотра
-    this.bboxPivot = null;
-    this.originalBboxPolygon = null;
-    this.originalLines = [];
-    this.previewAngle = 0;
-    this.rowsPreview = [];
-
-    // Добавление финальных рядов на карту
+    this.clearLayersAndInteractions();
+    this.resetPreviewState();
     this.addRowsToMap(resultSegments);
-
-    // Здесь можно отправить `resultSegments` на сервер, если это требуется
   }
 
-  /**
-   * Проверяет и замыкает ринг, если нужно. Возвращает null, если ринг некорректен.
-   */
+
   private closeAndValidateRing(ring: Coordinate[]): Coordinate[] | null {
     if (!ring || ring.length < 3) return null;
     const first = ring[0];
@@ -362,61 +322,96 @@ export class RowsGeneratorComponent {
     return ring;
   }
 
-  /**
-   * Преобразует координаты Polygon или MultiPolygon из OpenLayers в формат GeoJSON с замыканием рингов.
-   */
+  private processPolygonCoordinates(coords: Coordinate[][]): Coordinate[][] {
+    return coords
+      .map(ring => this.closeAndValidateRing(ring.map(point => toLonLat(point))))
+      .filter((ring): ring is Coordinate[] => !!ring && ring.length >= 4);
+  }
+
   private getValidPolygonCoords(geometry: Polygon | MultiPolygon): Coordinate[][] | Coordinate[][][] | null {
     if (geometry instanceof Polygon) {
-      const coords = geometry.getCoordinates()
-        .map((ring: Coordinate[]) => ring.map((point: Coordinate) => toLonLat(point)))
-        .map(ring => this.closeAndValidateRing(ring))
-        .filter((ring): ring is Coordinate[] => !!ring && ring.length >= 4);
+      const coords = this.processPolygonCoordinates(geometry.getCoordinates());
       return coords.length ? coords : null;
     } else if (geometry instanceof MultiPolygon) {
       const coords = geometry.getCoordinates()
-        .map((polygon: Coordinate[][]) =>
-          polygon
-            .map((ring: Coordinate[]) => ring.map((point: Coordinate) => toLonLat(point)))
-            .map(ring => this.closeAndValidateRing(ring))
-            .filter((ring): ring is Coordinate[] => !!ring && ring.length >= 4)
-        )
-        .filter((poly: Coordinate[][]) => poly.length > 0);
+        .map(polygon => this.processPolygonCoordinates(polygon))
+        .filter(poly => poly.length > 0);
       return coords.length ? coords : null;
     }
     return null;
   }
 
-  /**
-   * Вспомогательная функция для шага по долготе.
-   */
   private getLonStep(lat: number, stepMeters: number): number {
     const latRad = lat * Math.PI / 180;
     const stepKm = stepMeters / 1000;
     return stepKm / (111.32 * Math.cos(latRad));
   }
 
-  /**
-   * Добавляет сгенерированные ряды на карту.
-   */
-  private addRowsToMap(lines: any[]): void {
-    const s = new VectorSource();
-    lines.forEach(l => {
-      const g = l.geometry.coordinates.map((c: any) => fromLonLat(c));
-      s.addFeature(new Feature({
-        geometry: new LineString(g as number[][]),
-      }))
+  private createLineFeature(coordinates: any[]): Feature<LineString> {
+    return new Feature({
+      geometry: new LineString(this.toLonLatCoordinates(coordinates)),
     });
+  }
+
+  private addRowsToMap(lines: any[]): void {
+    const source = new VectorSource({
+      features: lines.map(line => this.createLineFeature(line.geometry.coordinates)),
+    });
+
     const layer = new VectorLayer({
-      source: s,
+      source,
       style: new Style({
         stroke: new Stroke({
           color: 'red',
           width: 2,
         }),
       }),
-      properties: {name: 'FinalRowsLayer'}
+      properties: { name: 'FinalRowsLayer' },
     });
+
     this.map()!.addLayer(layer);
   }
 
+  private removeLayerOrInteraction(item: VectorLayer | Translate | null, type: 'layer' | 'interaction') {
+    if (!item) return;
+
+    if (type === 'layer') {
+      this.map()!.removeLayer(item as VectorLayer);
+    } else if (type === 'interaction') {
+      this.map()!.removeInteraction(item as Translate);
+    }
+  }
+
+  private validateGeometry(): GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon> | null {
+    const geometry = this.geometry();
+    if (!geometry || !(geometry instanceof Polygon || geometry instanceof MultiPolygon)) return null;
+
+    const coords = this.getValidPolygonCoords(geometry);
+    if (!coords) {
+      alert('Нет корректных контуров');
+      return null;
+    }
+
+    return geometry instanceof Polygon
+      ? turf.polygon(coords as Coordinate[][])
+      : turf.multiPolygon(coords as Coordinate[][][]);
+  }
+
+  private clipRowsByPolygon(rows: any[], polygon: any): any[] {
+    const resultSegments: any[] = [];
+    rows.forEach(line => {
+      const split = turf.lineSplit(line, polygon);
+
+      split.features.forEach(segment => {
+        const segmentLength = turf.length(segment, { units: 'meters' });
+        if (segmentLength > 0) {
+          const center = turf.along(segment, segmentLength / 2, { units: 'meters' });
+          if (turf.booleanPointInPolygon(center, polygon)) {
+            resultSegments.push(segment);
+          }
+        }
+      });
+    });
+    return resultSegments;
+  }
 }
