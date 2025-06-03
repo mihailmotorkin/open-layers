@@ -75,13 +75,11 @@ export class RowsGeneratorComponent {
       angle: 0,
       scale: 1,
     });
-    this.clearLayersAndInteractions();
-    this.clearPreviewLayersAndInteractions();
-    this.resetPreviewState();
+    this.resetAll();
   }
 
   generateRows() {
-    this.clearPreviewLayersAndInteractions();
+    this.resetAll();
     this.generatePreview(
       this.generateRowsForm.value.step ?? 10,
       this.generateRowsForm.value.angle ?? 0,
@@ -93,8 +91,7 @@ export class RowsGeneratorComponent {
     const polygon = this.validateGeometry();
     if (!polygon) return;
     const resultSegments = this.clipRowsByPolygon(this.lines(), polygon);
-    this.clearLayersAndInteractions();
-    this.resetPreviewState();
+    this.resetAll();
     this.addRowsToMap(resultSegments);
   }
 
@@ -411,17 +408,19 @@ export class RowsGeneratorComponent {
     this.unifiedTranslate = null;
   }
 
-  private clearLayersAndInteractions(): void {
-    this.clearPreviewLayersAndInteractions();
-    this.map()!.getLayers().getArray()
-      .filter(l => l instanceof VectorLayer && l.get('name') === 'FinalRowsLayer')
-      .forEach(l => this.map()!.removeLayer(l));
-  }
-
   private resetPreviewState() {
     this.sourceBbox.set(null);
     this.pivot.set(null);
     this.angle.set(0);
+  }
+
+  private resetAll() {
+    this.clearPreviewLayersAndInteractions();
+    this.resetPreviewState();
+    // Удаляем итоговые слои
+    this.map()!.getLayers().getArray()
+      .filter(l => l instanceof VectorLayer && l.get('name') === 'FinalRowsLayer')
+      .forEach(l => this.map()!.removeLayer(l));
   }
 
   private closeAndValidateRing(ring: Coordinate[]): Coordinate[] | null {
