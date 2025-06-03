@@ -1,4 +1,4 @@
-import { Component, input } from '@angular/core';
+import { Component, input, signal, computed } from '@angular/core';
 import { FormControl, FormGroup, FormsModule, ReactiveFormsModule } from '@angular/forms';
 import { Geometry, LineString, MultiPolygon, Point, Polygon } from 'ol/geom';
 import * as turf from '@turf/turf';
@@ -10,7 +10,7 @@ import VectorSource from 'ol/source/Vector';
 import { Circle, Fill, Stroke, Style } from 'ol/style';
 import { Translate } from 'ol/interaction';
 import Collection from 'ol/Collection';
-import { GeoJSON } from 'ol/format';
+import PointerInteraction from 'ol/interaction/Pointer';
 
 @Component({
   selector: 'app-rows-generator',
@@ -28,18 +28,40 @@ export class RowsGeneratorComponent {
   private rowsPreviewLayer: VectorLayer | null = null;
   private bboxPreviewLayer: VectorLayer | null = null;
   private handleLayer: VectorLayer | null = null;
-  private handleTranslate: Translate | null = null;
+  private unifiedTranslate: Translate | null = null;
   private handleFeature: Feature | null = null;
+  private handleRotateInteraction: PointerInteraction | null = null;
   private rowLineFeatures: Feature[] = [];
   private bboxFeature: Feature<Polygon> | null = null;
-  private bboxPivot: [number, number] | null = null;
-  private originalBboxPolygon: any = null;
-  private originalLines: any[] = [];
-  private previewAngle: number = 0;
   private dragStartAngle: number | null = null;
   private dragStartPreviewAngle: number = 0;
   private rotateTimeout: any = null;
-  rowsPreview: any[] = [];
+
+  private dragStartBbox: [number, number][] | null = null;
+  private dragStartPivot: [number, number] | null = null;
+
+  // Единый источник правды
+  private sourceBbox = signal<[number, number][] | null>(null);
+  private pivot = signal<[number, number] | null>(null);
+  private angle = signal<number>(0);
+
+  // Вычисляемые значения
+  private bbox = computed(() => {
+    const src = this.sourceBbox();
+    const a = this.angle();
+    const p = this.pivot();
+    if (!src || !p) return null;
+    return turf.transformRotate(turf.polygon([src]), a, { pivot: p }).geometry.coordinates[0] as [number, number][];
+  });
+
+  public lines = computed(() => {
+    const src = this.sourceBbox();
+    const a = this.angle();
+    const p = this.pivot();
+    if (!src || !p) return [];
+    const lines = this.createLinesForBbox(src, this.generateRowsForm.value.step ?? 10);
+    return lines.map(line => turf.transformRotate(line, a, { pivot: p }));
+  });
 
   generateRowsForm = new FormGroup({
     step: new FormControl<number>(10),
@@ -47,269 +69,360 @@ export class RowsGeneratorComponent {
     scale: new FormControl<number>(1),
   });
 
-
-  previewRows(angleOverride?: number) {
-    this.clearPreviewLayersAndInteractions();
-
-    const {geometry, step, angle, scale, coords, pol} = this.preparePreviewGeometry(angleOverride);
-    if (!geometry || !coords || !pol) return;
-
-    const {bboxPolygon, bboxPivot, originalLines} = this.createBboxAndLines(pol, step ?? 10, scale ?? 1);
-    this.bboxPivot = bboxPivot;
-    this.originalBboxPolygon = bboxPolygon;
-    this.originalLines = originalLines;
-
-    const {rotatedBboxPolygon, rotatedLines} = this.rotateBboxAndLines(bboxPolygon, originalLines, angle, bboxPivot);
-    this.rowsPreview = rotatedLines;
-
-    this.createPreviewFeatures(rotatedBboxPolygon, rotatedLines);
-    this.createPreviewLayers();
-    this.addHandleTranslate();
-  }
-
-  private clearPreviewLayersAndInteractions() {
-    if (this.rowsPreviewLayer) this.map()!.removeLayer(this.rowsPreviewLayer);
-    if (this.bboxPreviewLayer) this.map()!.removeLayer(this.bboxPreviewLayer);
-    if (this.handleLayer) this.map()!.removeLayer(this.handleLayer);
-    if (this.handleTranslate) this.map()!.removeInteraction(this.handleTranslate);
-  }
-
-  private clearLayersAndInteractions(): void {
-    this.removeLayerOrInteraction(this.rowsPreviewLayer, 'layer');
-    this.rowsPreviewLayer = null;
-
-    this.removeLayerOrInteraction(this.bboxPreviewLayer, 'layer');
-    this.bboxPreviewLayer = null;
-
-    this.removeLayerOrInteraction(this.handleLayer, 'layer');
-    this.handleLayer = null;
-
-    this.removeLayerOrInteraction(this.handleTranslate, 'interaction');
-    this.handleTranslate = null;
-  }
-
-  private preparePreviewGeometry(angleOverride?: number) {
-    const geometry = this.geometry();
-    if (!geometry || !(geometry instanceof Polygon || geometry instanceof MultiPolygon)) return {};
-
-    const {step, angle, scale} = this.generateRowsForm.getRawValue();
-    const usedAngle = angleOverride !== undefined ? angleOverride : angle ?? 0;
-    this.previewAngle = usedAngle;
-
-    const coords = this.getValidPolygonCoords(geometry);
-    if (!coords) {
-      alert('Нет корректных контуров');
-      return {};
-    }
-
-    let pol: any;
-    if (geometry instanceof Polygon) {
-      pol = turf.polygon(coords as Coordinate[][]);
-    } else {
-      pol = turf.multiPolygon(coords as Coordinate[][][]);
-    }
-
-    return {geometry, step, angle: usedAngle, scale, coords, pol};
-  }
-
-  private createBboxAndLines(pol: any, step: number, scale: number) {
-    let bboxPolygon = turf.bboxPolygon(turf.bbox(pol));
-    bboxPolygon = turf.transformScale(bboxPolygon, scale ?? 1);
-    const bboxPivot = turf.centroid(bboxPolygon).geometry.coordinates as [number, number];
-
-    const bbox = turf.bbox(bboxPolygon);
-    const lines: any[] = [];
-    for (let lon = bbox[0]; lon <= bbox[2]; lon += this.getLonStep(bbox[1], step ?? 10)) {
-      let line = turf.lineString([[lon, bbox[1]], [lon, bbox[3]]]);
-      lines.push(line);
-    }
-    return {bboxPolygon, bboxPivot, originalLines: lines};
-  }
-
-  private rotateBboxAndLines(bboxPolygon: any, lines: any[], angle: number, pivot: [number, number]) {
-    const rotatedBboxPolygon = turf.transformRotate(bboxPolygon, angle, {pivot});
-    const rotatedLines = lines.map(line => turf.transformRotate(line, angle, {pivot}));
-    return {rotatedBboxPolygon, rotatedLines};
-  }
-
-  private toLonLatCoordinates(coordinates: any[]): any[] {
-    return coordinates.map(coord => fromLonLat(coord));
-  }
-
-  private createPreviewFeatures(rotatedBboxPolygon: any, rotatedLines: any[]) {
-    const bboxCoords = rotatedBboxPolygon.geometry.coordinates[0];
-    const handleCoord = bboxCoords[1];
-
-    this.bboxFeature = new Feature({
-      geometry: new Polygon(
-        rotatedBboxPolygon.geometry.coordinates.map((ring: any) =>
-          this.toLonLatCoordinates(ring)
-        )
-      )
-    });
-
-    this.handleFeature = new Feature({
-      geometry: new Point(fromLonLat(handleCoord)),
-      name: 'rotateHandle'
-    });
-
-    this.rowLineFeatures = rotatedLines.map(line =>
-      new Feature({
-        geometry: new LineString(this.toLonLatCoordinates(line.geometry.coordinates))
-      })
-    );
-  }
-
-  private createPreviewLayers() {
-    this.bboxPreviewLayer = new VectorLayer({
-      source: new VectorSource({features: this.bboxFeature ? [this.bboxFeature] : []}),
-      style: new Style({
-        stroke: new Stroke({color: 'orange', width: 2}),
-        fill: new Fill({color: 'rgba(255,165,0,0.05)'}),
-      }),
-      properties: {name: 'BBoxPreviewLayer'}
-    });
-    this.map()!.addLayer(this.bboxPreviewLayer);
-
-    this.handleLayer = new VectorLayer({
-      source: new VectorSource({features: this.handleFeature ? [this.handleFeature] : []}),
-      style: new Style({
-        image: new Circle({
-          radius: 7,
-          fill: new Fill({color: 'orange'}),
-          stroke: new Stroke({color: 'black', width: 2})
-        })
-      }),
-      properties: {name: 'HandleLayer'}
-    });
-    this.map()!.addLayer(this.handleLayer);
-
-    this.rowsPreviewLayer = new VectorLayer({
-      source: new VectorSource({features: this.rowLineFeatures}),
-      style: new Style({
-        stroke: new Stroke({color: 'blue', width: 2, lineDash: [8, 8]}),
-      }),
-      properties: {name: 'RowsPreviewLayer'}
-    });
-    this.map()!.addLayer(this.rowsPreviewLayer);
-  }
-
-  private addHandleTranslate(): void {
-    this.handleTranslate = new Translate({
-      features: new Collection([this.handleFeature!].filter((f): f is Feature<Geometry> => !!f)),
-    });
-    this.map()!.addInteraction(this.handleTranslate);
-
-    this.handleTranslate.on('translatestart', this.onTranslateStart.bind(this));
-    this.handleTranslate.on('translating', this.onTranslating.bind(this));
-    this.handleTranslate.on('translateend', this.onTranslateEnd.bind(this));
-  }
-
-  private onTranslateStart(evt: any): void {
-    const pivot3857 = fromLonLat(this.bboxPivot!);
-    const mouse3857 = evt.coordinate;
-    this.dragStartAngle = Math.atan2(mouse3857[1] - pivot3857[1], mouse3857[0] - pivot3857[0]);
-    this.dragStartPreviewAngle = this.previewAngle;
-  }
-
-  private onTranslating(evt: any): void {
-    if (this.rotateTimeout) return;
-
-    this.rotateTimeout = setTimeout(() => {
-      if (this.dragStartAngle === null) {
-        this.rotateTimeout = null;
-        return;
-      }
-
-      const pivot3857 = fromLonLat(this.bboxPivot!);
-      const mouse3857 = evt.coordinate;
-      const currentAngle = Math.atan2(mouse3857[1] - pivot3857[1], mouse3857[0] - pivot3857[0]);
-      let delta = (this.dragStartAngle - currentAngle) * 180 / Math.PI;
-      if (delta < 0) delta += 360;
-
-      const newAngle = this.dragStartPreviewAngle + delta;
-      this.previewAngle = newAngle;
-
-      this.updateRotatedGeometry(newAngle);
-      this.rotateTimeout = null;
-    }, 10);
-  }
-
-  private onTranslateEnd(): void {
-    this.generateRowsForm.get('angle')?.setValue(Math.round(this.previewAngle));
-    this.dragStartAngle = null;
-  }
-
-  private updateRotatedGeometry(newAngle: number): void {
-    const rotatedBboxPolygon = turf.transformRotate(this.originalBboxPolygon, newAngle, {
-      pivot: this.bboxPivot ?? undefined,
-    });
-    const rotatedLines = this.originalLines.map(line =>
-      turf.transformRotate(line, newAngle, { pivot: this.bboxPivot ?? undefined })
-    );
-
-    const bboxCoords = rotatedBboxPolygon.geometry.coordinates[0];
-    const handleCoord = bboxCoords[1];
-
-    this.bboxFeature!.setGeometry(
-      new Polygon(
-        rotatedBboxPolygon.geometry.coordinates.map((ring: any) =>
-          ring.map((coord: any) => fromLonLat(coord))
-        )
-      )
-    );
-    this.handleFeature!.setGeometry(new Point(fromLonLat(handleCoord)));
-    this.rowLineFeatures.forEach((f, i) => {
-      f.setGeometry(new LineString(rotatedLines[i].geometry.coordinates.map((c: any) => fromLonLat(c))));
-    });
-
-    this.rowsPreview = rotatedLines;
-  }
-
   resetRowsFormAndPreview() {
     this.generateRowsForm.reset({
       step: 10,
       angle: 0,
       scale: 1,
     });
-
     this.clearLayersAndInteractions();
-
-    this.map()!.getLayers().getArray()
-      .filter(l => l instanceof VectorLayer && l.get('name') === 'FinalRowsLayer')
-      .forEach(l => this.map()!.removeLayer(l));
-
+    this.clearPreviewLayersAndInteractions();
     this.resetPreviewState();
   }
 
-  private resetPreviewState () {
-    this.bboxPivot = null;
-    this.originalBboxPolygon = null;
-    this.originalLines = [];
-    this.previewAngle = 0;
-    this.rowsPreview = [];
-  }
-
   generateRows() {
-    if (this.rowsPreviewLayer) {
-      this.map()!.removeLayer(this.rowsPreviewLayer);
-      this.rowsPreviewLayer = null;
-    }
-
-    this.previewRows();
+    this.clearPreviewLayersAndInteractions();
+    this.generatePreview(
+      this.generateRowsForm.value.step ?? 10,
+      this.generateRowsForm.value.angle ?? 0,
+      this.generateRowsForm.value.scale ?? 1
+    );
   }
 
   saveRows() {
     const polygon = this.validateGeometry();
     if (!polygon) return;
-
-    const resultSegments = this.clipRowsByPolygon(this.rowsPreview, polygon);
-
+    const resultSegments = this.clipRowsByPolygon(this.lines(), polygon);
     this.clearLayersAndInteractions();
     this.resetPreviewState();
     this.addRowsToMap(resultSegments);
   }
 
+  private addRowsToMap(lines: any[]): void {
+    const source = new VectorSource({
+      features: lines.map(line => this.createLineFeature(line.geometry.coordinates)),
+    });
+
+    const layer = new VectorLayer({
+      source,
+      style: new Style({
+        stroke: new Stroke({
+          color: 'red',
+          width: 2,
+        }),
+      }),
+      properties: { name: 'FinalRowsLayer' },
+    });
+
+    this.map()!.addLayer(layer);
+  }
+
+  private generatePreview(step: number, angle: number, scale: number) {
+    const geometry = this.geometry();
+    if (!geometry || !(geometry instanceof Polygon || geometry instanceof MultiPolygon)) return;
+    const coords = this.getValidPolygonCoords(geometry);
+    if (!coords) return;
+
+    const pol = geometry instanceof Polygon
+      ? turf.polygon(coords as [number, number][][])
+      : turf.multiPolygon(coords as [number, number][][][]);
+
+    let bboxPolygon = turf.bboxPolygon(turf.bbox(pol));
+    bboxPolygon = turf.transformScale(bboxPolygon, scale ?? 1);
+    const bboxCoords = bboxPolygon.geometry.coordinates[0] as [number, number][];
+    if (bboxCoords.length < 4) return;
+    const pivot = turf.centroid(bboxPolygon).geometry.coordinates as [number, number];
+
+    this.sourceBbox.set(bboxCoords);
+    this.pivot.set(pivot);
+    this.angle.set(angle);
+
+    // Создаём features и слои только один раз
+    this.initPreviewFeaturesAndLayers();
+    this.addHandleRotateInteraction();
+    this.addBboxTranslate();
+    this.drawPreview();
+  }
+
+  private initPreviewFeaturesAndLayers() {
+    // bbox feature
+    if (!this.bboxFeature) {
+      this.bboxFeature = new Feature({
+        geometry: new Polygon([[[0, 0], [0, 0], [0, 0], [0, 0]]])
+      });
+    }
+    // handle feature
+    if (!this.handleFeature) {
+      this.handleFeature = new Feature({
+        geometry: new Point([0, 0])
+      });
+    }
+    // линии features
+    if (!this.rowLineFeatures || this.rowLineFeatures.length === 0) {
+      this.rowLineFeatures = [];
+      // создаём пустые features, потом обновим геометрию
+    }
+    // слои
+    if (!this.bboxPreviewLayer) {
+      this.bboxPreviewLayer = new VectorLayer({
+        source: new VectorSource({ features: [this.bboxFeature] }),
+        style: new Style({
+          stroke: new Stroke({ color: 'orange', width: 2 }),
+          fill: new Fill({ color: 'rgba(255, 165, 0, 0.05)' })
+        }),
+      });
+      this.map()!.addLayer(this.bboxPreviewLayer);
+    }
+    if (!this.handleLayer) {
+      this.handleLayer = new VectorLayer({
+        source: new VectorSource({ features: [this.handleFeature] }),
+        style: new Style({
+          image: new Circle({
+            radius: 7,
+            fill: new Fill({ color: 'yellow' }),
+            stroke: new Stroke({ color: 'orange', width: 2 }),
+          }),
+        }),
+      });
+      this.map()!.addLayer(this.handleLayer);
+    }
+    if (!this.rowsPreviewLayer) {
+      this.rowsPreviewLayer = new VectorLayer({
+        source: new VectorSource({ features: this.rowLineFeatures }),
+        style: new Style({
+          stroke: new Stroke({ color: 'blue', width: 2, lineDash: [8, 8] }),
+        }),
+      });
+      this.map()!.addLayer(this.rowsPreviewLayer);
+    }
+  }
+
+  private drawPreview(bboxOverride?: [number, number][], linesOverride?: any[], pivotOverride?: [number, number]) {
+    const bbox = bboxOverride || this.bbox();
+    const lines = linesOverride || this.lines();
+    const pivot = pivotOverride || this.pivot();
+    if (!bbox || !lines || !pivot) return;
+    // bbox
+    if (this.bboxFeature) {
+      (this.bboxFeature.getGeometry() as Polygon).setCoordinates([
+        bbox.map(coord => fromLonLat(coord))
+      ]);
+    }
+    // handle
+    if (this.handleFeature) {
+      const handleCoord = bbox[1];
+      (this.handleFeature.getGeometry() as Point).setCoordinates(fromLonLat(handleCoord));
+    }
+    // lines
+    if (this.rowLineFeatures.length !== lines.length) {
+      this.rowLineFeatures = lines.map(line =>
+        new Feature({
+          geometry: new LineString(line.geometry.coordinates.map((coord: any) => fromLonLat(coord)))
+        })
+      );
+      if (this.rowsPreviewLayer) {
+        (this.rowsPreviewLayer.getSource() as VectorSource).clear();
+        (this.rowsPreviewLayer.getSource() as VectorSource).addFeatures(this.rowLineFeatures);
+      }
+    } else {
+      this.rowLineFeatures.forEach((feature, i) => {
+        (feature.getGeometry() as LineString).setCoordinates(
+          lines[i].geometry.coordinates.map((coord: any) => fromLonLat(coord))
+        );
+      });
+    }
+  }
+
+  // --- Перемещение bbox ---
+  private addBboxTranslate(): void {
+    if (this.unifiedTranslate) return; // только один раз
+    this.unifiedTranslate = new Translate({
+      features: new Collection([
+        this.bboxFeature!,
+      ]),
+    });
+    this.map()!.addInteraction(this.unifiedTranslate);
+    this.unifiedTranslate.on('translatestart', this.onBboxTranslateStart.bind(this));
+    this.unifiedTranslate.on('translating', this.onBboxTranslating.bind(this));
+    this.unifiedTranslate.on('translateend', this.onBboxTranslateEnd.bind(this));
+  }
+
+  private onBboxTranslateStart(evt: any) {
+    this.dragStartBbox = this.sourceBbox();
+    this.dragStartPivot = this.pivot();
+  }
+
+  private onBboxTranslating(evt: any) {
+    if (!this.dragStartBbox || !this.dragStartPivot) return;
+    // Центр bboxFeature (lonlat)
+    const currentCenter = turf.centroid(turf.polygon([this.getCurrentBboxFromMap()])).geometry.coordinates as [number, number];
+    const startCenter = this.dragStartPivot;
+    const dx = currentCenter[0] - startCenter[0];
+    const dy = currentCenter[1] - startCenter[1];
+    // Сдвигаем исходный bbox и pivot
+    const movedBbox = this.dragStartBbox.map(([x, y]) => [x + dx, y + dy] as [number, number]);
+    const movedPivot: [number, number] = [this.dragStartPivot[0] + dx, this.dragStartPivot[1] + dy];
+    // Ряды вычисляем из movedBbox и текущего angle
+    const rotatedBbox = turf.transformRotate(turf.polygon([movedBbox]), this.angle(), { pivot: movedPivot }).geometry.coordinates[0] as [number, number][];
+    const lines = this.createLinesForBbox(movedBbox, this.generateRowsForm.value.step ?? 10)
+      .map(line => turf.transformRotate(line, this.angle(), { pivot: movedPivot }));
+    this.drawPreview(rotatedBbox, lines, movedPivot);
+  }
+
+  private onBboxTranslateEnd(evt: any) {
+    if (!this.dragStartBbox || !this.dragStartPivot) return;
+    // Аналогично translating
+    const currentCenter = turf.centroid(turf.polygon([this.getCurrentBboxFromMap()])).geometry.coordinates as [number, number];
+    const startCenter = this.dragStartPivot;
+    const dx = currentCenter[0] - startCenter[0];
+    const dy = currentCenter[1] - startCenter[1];
+    const movedBbox = this.dragStartBbox.map(([x, y]) => [x + dx, y + dy] as [number, number]);
+    const movedPivot: [number, number] = [this.dragStartPivot[0] + dx, this.dragStartPivot[1] + dy];
+    this.sourceBbox.set(movedBbox);
+    this.pivot.set(movedPivot);
+    this.drawPreview();
+    this.dragStartBbox = null;
+    this.dragStartPivot = null;
+  }
+
+  // --- Вращение bbox ---
+  private addHandleRotateInteraction(): void {
+    if (this.handleRotateInteraction) {
+      this.map()!.removeInteraction(this.handleRotateInteraction);
+    }
+
+    let isRotating = false;
+
+    this.handleRotateInteraction = new PointerInteraction({
+      handleDownEvent: (evt) => {
+        const feature = this.map()!.forEachFeatureAtPixel(evt.pixel, f => f);
+        if (feature === this.handleFeature) {
+          isRotating = true;
+          this.onTranslateStart(evt);
+          return true;
+        }
+        return false;
+      },
+      handleDragEvent: (evt) => {
+        if (isRotating) {
+          this.onTranslating(evt);
+        }
+      },
+      handleUpEvent: (evt) => {
+        if (isRotating) {
+          this.onTranslateEnd();
+          isRotating = false;
+          return true;
+        }
+        return false;
+      }
+    });
+
+    this.map()!.addInteraction(this.handleRotateInteraction);
+  }
+
+  private onRotate(newAngle: number) {
+    this.angle.set(newAngle);
+    this.drawPreview();
+  }
+
+  // --- Вспомогательные методы для вращения ---
+  private onTranslateStart(evt: any): void {
+    const pivot = this.pivot();
+    if (!pivot) return;
+    const pivot3857 = fromLonLat(pivot);
+    const mouse3857 = evt.coordinate;
+    this.dragStartAngle = Math.atan2(mouse3857[1] - pivot3857[1], mouse3857[0] - pivot3857[0]);
+    this.dragStartPreviewAngle = this.angle();
+  }
+
+  private onTranslating(evt: any): void {
+    if (this.rotateTimeout || this.dragStartAngle === null) return;
+    const pivot = this.pivot();
+    if (!pivot) return;
+    this.rotateTimeout = setTimeout(() => {
+      try {
+        const pivot3857 = fromLonLat(pivot);
+        const mouse3857 = evt.coordinate;
+        const currentAngle = Math.atan2(mouse3857[1] - pivot3857[1], mouse3857[0] - pivot3857[0]);
+        let delta = (this.dragStartAngle! - currentAngle) * 180 / Math.PI;
+        if (delta < 0) delta += 360;
+        const newAngle = this.dragStartPreviewAngle + delta;
+        this.onRotate(newAngle);
+      } catch (error) {
+        console.error('Error during rotation:', error);
+      } finally {
+        this.rotateTimeout = null;
+      }
+    }, 10);
+  }
+
+  private onTranslateEnd(): void {
+    this.generateRowsForm.get('angle')?.setValue(Math.round(this.angle()));
+    this.dragStartAngle = null;
+  }
+
+  private createLinesForBbox(
+    bboxCoords: [number, number][],
+    step: number
+  ): any[] {
+    // Пример генерации параллельных линий внутри bbox (можно заменить на свою логику)
+    // Здесь просто создаются вертикальные линии с шагом step
+    const [minX, minY] = bboxCoords.reduce(
+      ([minX, minY], [x, y]) => [Math.min(minX, x), Math.min(minY, y)],
+      [bboxCoords[0][0], bboxCoords[0][1]]
+    );
+    const [maxX, maxY] = bboxCoords.reduce(
+      ([maxX, maxY], [x, y]) => [Math.max(maxX, x), Math.max(maxY, y)],
+      [bboxCoords[0][0], bboxCoords[0][1]]
+    );
+
+    const lines: any[] = [];
+    let x = minX;
+    while (x <= maxX) {
+      lines.push(turf.lineString([
+        [x, minY],
+        [x, maxY]
+      ]));
+      x += this.getLonStep((minY + maxY) / 2, step);
+    }
+    return lines;
+  }
+
+  private getCurrentBboxFromMap(): [number, number][] {
+    // Получаем bbox из карты (lonlat)
+    const coords3857 = (this.bboxFeature!.getGeometry() as Polygon).getCoordinates()[0];
+    return coords3857
+      .map(coord => toLonLat(coord))
+      .filter((c): c is [number, number] => Array.isArray(c) && c.length === 2 && typeof c[0] === 'number' && typeof c[1] === 'number');
+  }
+
+  // --- Очистка ---
+  private clearPreviewLayersAndInteractions() {
+    if (this.rowsPreviewLayer) this.map()!.removeLayer(this.rowsPreviewLayer);
+    if (this.bboxPreviewLayer) this.map()!.removeLayer(this.bboxPreviewLayer);
+    if (this.handleLayer) this.map()!.removeLayer(this.handleLayer);
+    if (this.handleRotateInteraction) this.map()!.removeInteraction(this.handleRotateInteraction);
+    if (this.unifiedTranslate) this.map()!.removeInteraction(this.unifiedTranslate);
+    this.rowsPreviewLayer = null;
+    this.bboxPreviewLayer = null;
+    this.handleLayer = null;
+    this.handleRotateInteraction = null;
+    this.unifiedTranslate = null;
+  }
+
+  private clearLayersAndInteractions(): void {
+    this.clearPreviewLayersAndInteractions();
+    this.map()!.getLayers().getArray()
+      .filter(l => l instanceof VectorLayer && l.get('name') === 'FinalRowsLayer')
+      .forEach(l => this.map()!.removeLayer(l));
+  }
+
+  private resetPreviewState() {
+    this.sourceBbox.set(null);
+    this.pivot.set(null);
+    this.angle.set(0);
+  }
 
   private closeAndValidateRing(ring: Coordinate[]): Coordinate[] | null {
     if (!ring || ring.length < 3) return null;
@@ -353,33 +466,11 @@ export class RowsGeneratorComponent {
     });
   }
 
-  private addRowsToMap(lines: any[]): void {
-    const source = new VectorSource({
-      features: lines.map(line => this.createLineFeature(line.geometry.coordinates)),
-    });
-
-    const layer = new VectorLayer({
-      source,
-      style: new Style({
-        stroke: new Stroke({
-          color: 'red',
-          width: 2,
-        }),
-      }),
-      properties: { name: 'FinalRowsLayer' },
-    });
-
-    this.map()!.addLayer(layer);
-  }
-
-  private removeLayerOrInteraction(item: VectorLayer | Translate | null, type: 'layer' | 'interaction') {
-    if (!item) return;
-
-    if (type === 'layer') {
-      this.map()!.removeLayer(item as VectorLayer);
-    } else if (type === 'interaction') {
-      this.map()!.removeInteraction(item as Translate);
+  private toLonLatCoordinates(coordinates: any[]): any[] {
+    if (Array.isArray(coordinates) && Array.isArray(coordinates[0])) {
+      return coordinates.map(coord => fromLonLat(coord));
     }
+    return fromLonLat(coordinates);
   }
 
   private validateGeometry(): GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon> | null {

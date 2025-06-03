@@ -18,7 +18,7 @@
     <div class="buttons">
       <button type="button" (click)="resetRowsFormAndPreview()">Редактировать</button>
       <button type="button" (click)="generateRows()">Сгенерировать</button>
-      <button type="button" (click)="saveRows()" [disabled]="!rowsPreview.length">Сохранить</button>
+      <button type="button" (click)="saveRows()" [disabled]="!lines().length">Сохранить</button>
     </div>
   </form>
 </div>
