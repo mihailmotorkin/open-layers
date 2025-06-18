@@ -9,7 +9,7 @@ import {
   computed
 } from '@angular/core';
 import { WfsService } from '../../services/wfs.service';
-import { GeoFeatureCollection } from '../../interfaces/feature.interface';
+import { GeoFeatureCollection, GeometryType } from '../../interfaces/feature.interface';
 import { GeoJSON } from 'ol/format';
 import { Feature, Map, View } from 'ol';
 import { Pixel } from 'ol/pixel';
@@ -23,6 +23,8 @@ import VectorSource from 'ol/source/Vector';
 import { FeatureLike } from 'ol/Feature';
 import { PointsGeneratorComponent } from '../points-generator/points-generator.component';
 import { RowsGeneratorComponent } from '../rows-generator/rows-generator.component';
+import { ModalInteractionComponent } from '../modal-intaraction/modal-interaction.component';
+import { ModalService } from '../../сommon-ui/modal-feature/services/modal.service';
 
 @Component({
   selector: 'app-map',
@@ -35,6 +37,7 @@ import { RowsGeneratorComponent } from '../rows-generator/rows-generator.compone
 })
 export class MapComponent implements OnInit, AfterViewInit {
   wfsService = inject(WfsService);
+  #modalService = inject(ModalService);
 
   loading = signal(false);
   selectedFeature = signal<Feature | null>(null);
@@ -147,7 +150,7 @@ export class MapComponent implements OnInit, AfterViewInit {
     });
   }
 
-  private loadMockFeaturesToMap(response: GeoFeatureCollection<'MultiPolygon' | 'Point' | 'LineString'>): void {
+  private loadMockFeaturesToMap(response: GeoFeatureCollection<GeometryType>): void {
     const format = new GeoJSON();
     const features = format.readFeatures(response, {
       featureProjection: 'EPSG:3857',
@@ -198,25 +201,47 @@ export class MapComponent implements OnInit, AfterViewInit {
       return;
     }
 
-    const type = geometry.getType();
+    const type = geometry.getType() as GeometryType;
 
-    if (type === 'LineString') {
-      this.handleGeometrySelection(geometry, featureLike, 'Сгенерировать точки на линии?')
-      return;
-    } else if ((type === 'Polygon' || type === 'MultiPolygon')) {
-      this.handleGeometrySelection(geometry, featureLike, 'Сгенерировать ряды внутри полигона?')
-      return;
-    }
+    this.toggleModal(type, geometry, featureLike);
   }
 
-  private handleGeometrySelection(
+  private toggleModal(
+    type: GeometryType,
     geometry: Geometry,
-    feature: Feature,
-    message: string
+    feature: Feature
   ) {
-    if (confirm(message)) {
-      this.selectedGeometry.set(geometry);
-      this.selectedFeature.set(feature);
+    const modalRef = this.#modalService.showModal(ModalInteractionComponent, type);
+
+    this.selectedFeature.set(feature);
+
+    modalRef?.instance.closed.subscribe((event: 'generate' | 'delete' | 'cancel') => {
+      if (event === 'generate') {
+        this.selectedGeometry.set(geometry);
+      } else if (event === 'delete') {
+        this.deleteFeature(feature);
+      } else {
+        this.selectedGeometry.set(null);
+      }
+      this.#modalService.destroyModal();
+    });
+  }
+
+  deleteFeature(feature: Feature) {
+    if (!this.mapInstance) return;
+
+    const layers = this.mapInstance.getLayers().getArray();
+
+    for (const layer of layers) {
+      if (!(layer instanceof VectorLayer)) continue;
+
+      const source = layer.getSource();
+      const features = source.getFeatures();
+
+      if (features.includes(feature)) {
+        source.removeFeature(feature);
+        if (source.getFeatures().length === 0) this.mapInstance.removeLayer(layer);
+      }
     }
   }
 

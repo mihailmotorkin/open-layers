@@ -1,0 +1,12 @@
+<div class="backdrop">
+  <div class="modal-content" #modalContent>
+    <button
+      type="button"
+      class="close-btn"
+      (click)="closeModal($event)"
+    >
+      <svg class="svg18" icon="close"></svg>
+    </button>
+    <ng-content></ng-content>
+  </div>
+</div>

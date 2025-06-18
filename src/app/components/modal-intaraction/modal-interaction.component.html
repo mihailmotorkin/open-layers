@@ -1,0 +1,21 @@
+<app-base-modal>
+  @if (type() === 'LineString') {
+    <h3 class="modal-title">Взаимодействие с рядами</h3>
+    <div class="buttons-wrapper">
+      <button class="action-button" (click)="close('generate')">Сгенерировать ямы</button>
+      <button class="action-button" (click)="close('delete')">Удалить ряд</button>
+    </div>
+  } @else if (type() === 'Point') {
+    <h3 class="modal-title">Удалить яму</h3>
+    <div class="buttons-wrapper">
+      <button class="action-button" (click)="close('delete')">Да</button>
+      <button class="action-button" (click)="close('cancel')">Нет</button>
+    </div>
+  } @else if (type() === 'Polygon' || 'MultiPolygon') {
+    <h3 class="modal-title">Сгенерировать ряды</h3>
+    <div class="buttons-wrapper">
+      <button class="action-button" (click)="close('generate')">Да</button>
+      <button class="action-button" (click)="close('cancel')">Нет</button>
+    </div>
+  }
+</app-base-modal>

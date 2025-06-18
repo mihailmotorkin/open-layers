@@ -4,8 +4,6 @@ export type GeometryType =
   | 'Point'
   | 'LineString'
   | 'Polygon'
-  | 'MultiPoint'
-  | 'MultiLineString'
   | 'MultiPolygon';
 
 export type CoordinatesByGeometry<T extends GeometryType> =
