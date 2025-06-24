@@ -43,3 +43,7 @@
   display: flex;
   gap: 6px;
 }
+
+.form-validation {
+  color: red;
+}

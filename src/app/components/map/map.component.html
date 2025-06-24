@@ -6,7 +6,7 @@
   @if (selectedGeometryType(); as selected) {
     @if (selected.type === 'LineString') {
       <app-points-generator
-        [map]="mapInstance"
+        [generatedPointsVectorSource]="generatedPointsVectorSource"
         [geometry]="selected.geometry"
       ></app-points-generator>
     } @else if (selected.type === 'Polygon' || 'MultiPolygon') {

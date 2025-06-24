@@ -2,13 +2,11 @@ import { Component, input } from '@angular/core';
 import { FormControl, FormGroup, FormsModule, ReactiveFormsModule } from "@angular/forms";
 import { Geometry, LineString, Point } from 'ol/geom';
 import { fromLonLat, toLonLat } from 'ol/proj';
-import { Feature, Map } from 'ol';
+import { Feature } from 'ol';
 import { Coordinate } from 'ol/coordinate';
 import * as turf from '@turf/turf';
 import { Feature as GeoFeature, LineString as GeoLineString } from 'geojson';
 import VectorSource from 'ol/source/Vector';
-import { Circle, Fill, Style } from 'ol/style';
-import VectorLayer from 'ol/layer/Vector';
 
 @Component({
   selector: 'app-points-generator',
@@ -21,9 +19,7 @@ import VectorLayer from 'ol/layer/Vector';
 })
 export class PointsGeneratorComponent {
   geometry = input<Geometry>();
-  map = input<Map>();
-
-  private generatedPointsVectorSource = new VectorSource();
+  generatedPointsVectorSource = input<VectorSource>();
 
   generatePointsForm = new FormGroup({
     distance: new FormControl<number | null>(null),
@@ -100,7 +96,7 @@ export class PointsGeneratorComponent {
     const formData = this.sanitizeFormValues(this.generatePointsForm.getRawValue());
 
     if (!formData.count && !formData.distance) {
-      return alert('Вы должны ввести или количество точек, или расстояние между ними!');
+      return alert('Укажите количество точек или расстояние между ними!');
     }
 
     const lineCoords = geometry.getCoordinates().map(coord => toLonLat(coord, 'EPSG:3857'));
@@ -110,23 +106,14 @@ export class PointsGeneratorComponent {
       return;
     }
 
-    points.forEach(point => {
-      this.generatedPointsVectorSource
-        .addFeature(new Feature({
-          geometry: new Point(fromLonLat(point))
+    points.forEach((point, index) => {
+      this.generatedPointsVectorSource()!.addFeature(
+        new Feature({
+          geometry: new Point(fromLonLat(point)),
+          parentLineId: this.geometry()?.get('id'),
+          pointId: `point-${this.geometry()?.get('id')}-${index}`,
         }));
     });
-
-    const layer = new VectorLayer({
-      source: this.generatedPointsVectorSource,
-      style: new Style({
-        image: new Circle({
-          radius: 5,
-          fill: new Fill({color: 'yellow'}),
-        }),
-      }),
-    });
-    this.map()!.addLayer(layer);
   }
 
 }

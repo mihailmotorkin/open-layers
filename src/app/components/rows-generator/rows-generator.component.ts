@@ -1,9 +1,9 @@
 import { Component, input, signal, computed } from '@angular/core';
-import { FormControl, FormGroup, FormsModule, ReactiveFormsModule } from '@angular/forms';
+import { FormControl, FormGroup, FormsModule, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Geometry, LineString, MultiPolygon, Point, Polygon } from 'ol/geom';
 import * as turf from '@turf/turf';
 import { Coordinate } from 'ol/coordinate';
-import { Feature, Map } from 'ol';
+import { Feature, Map, MapBrowserEvent } from 'ol';
 import { fromLonLat, toLonLat } from 'ol/proj';
 import VectorLayer from 'ol/layer/Vector';
 import VectorSource from 'ol/source/Vector';
@@ -11,6 +11,13 @@ import { Circle, Fill, Stroke, Style } from 'ol/style';
 import { Translate } from 'ol/interaction';
 import Collection from 'ol/Collection';
 import PointerInteraction from 'ol/interaction/Pointer';
+import type {
+  Feature as TurfFeature,
+  LineString as TurfLineString,
+  Polygon as TurfPolygon,
+  MultiPolygon as TurfMultiPolygon,
+  Geometry as TurfGeometry
+} from 'geojson';
 
 @Component({
   selector: 'app-rows-generator',
@@ -37,12 +44,12 @@ export class RowsGeneratorComponent {
   private dragStartPreviewAngle: number = 0;
   private rotateTimeout: any = null;
 
-  private dragStartBbox: [number, number][] | null = null;
-  private dragStartPivot: [number, number] | null = null;
+  private dragStartBbox: Coordinate[] | null = null;
+  private dragStartPivot: Coordinate | null = null;
 
   // Единый источник правды
-  private sourceBbox = signal<[number, number][] | null>(null);
-  private pivot = signal<[number, number] | null>(null);
+  private sourceBbox = signal<Coordinate[] | null>(null);
+  private pivot = signal<Coordinate | null>(null);
   private angle = signal<number>(0);
 
   // Вычисляемые значения
@@ -51,7 +58,7 @@ export class RowsGeneratorComponent {
     const a = this.angle();
     const p = this.pivot();
     if (!src || !p) return null;
-    return turf.transformRotate(turf.polygon([src]), a, { pivot: p }).geometry.coordinates[0] as [number, number][];
+    return turf.transformRotate(turf.polygon([src]), a, { pivot: p }).geometry.coordinates[0] as Coordinate[];
   });
 
   public lines = computed(() => {
@@ -66,7 +73,8 @@ export class RowsGeneratorComponent {
   generateRowsForm = new FormGroup({
     step: new FormControl<number>(10),
     angle: new FormControl<number>(0),
-    scale: new FormControl<number>(1),
+    scale: new FormControl<number>(1, Validators.min(1)),
+    direction: new FormControl<'left-to-right' | 'right-to-left' | 'top-to-bottom' | 'bottom-to-top'>('left-to-right'),
   });
 
   resetRowsFormAndPreview() {
@@ -74,11 +82,17 @@ export class RowsGeneratorComponent {
       step: 10,
       angle: 0,
       scale: 1,
+      direction: 'left-to-right',
     });
     this.resetAll();
   }
 
   generateRows() {
+    this.generateRowsForm.markAllAsTouched();
+    this.generateRowsForm.updateValueAndValidity();
+
+    if (!this.generateRowsForm.valid) return;
+
     this.resetAll();
     this.generatePreview(
       this.generateRowsForm.value.step ?? 10,
@@ -90,24 +104,57 @@ export class RowsGeneratorComponent {
   saveRows() {
     const polygon = this.validateGeometry();
     if (!polygon) return;
-    const resultSegments = this.clipRowsByPolygon(this.lines(), polygon);
+
+    const segments = this.clipRowsByPolygon(this.lines(), polygon);
+    const direction = this.generateRowsForm.value.direction!;
+    const firstLineIndex = this.findFirstLineIndex(segments, direction);
     this.resetAll();
-    this.addRowsToMap(resultSegments);
+    this.addRowsToMap(segments, firstLineIndex);
   }
 
-  private addRowsToMap(lines: any[]): void {
+  private findFirstLineIndex(lines: any[], direction: string): number {
+    if (lines.length === 0) return -1;
+
+    return lines.reduce((firstLineIndex, line, i) => {
+      const coords = line.geometry.coordinates;
+      const currentMid = coords[Math.floor(coords.length / 2)];
+      const candidateMid = lines[firstLineIndex]?.geometry.coordinates[Math.floor(lines[firstLineIndex].geometry.coordinates.length / 2)];
+
+      switch (direction) {
+        case 'left-to-right':
+          return currentMid[0] < candidateMid[0] ? i : firstLineIndex;
+        case 'right-to-left':
+          return currentMid[0] > candidateMid[0] ? i : firstLineIndex;
+        case 'bottom-to-top':
+          return currentMid[1] < candidateMid[1] ? i : firstLineIndex;
+        case 'top-to-bottom':
+          return currentMid[1] > candidateMid[1] ? i : firstLineIndex;
+        default:
+          return firstLineIndex;
+      }
+    }, 0);
+  }
+
+  private addRowsToMap(lines: any[], highlightedIndex: number = -1): void {
     const source = new VectorSource({
-      features: lines.map(line => this.createLineFeature(line.geometry.coordinates)),
+      features: lines.map((line, index) => {
+        const feature = this.createLineFeature(line.geometry.coordinates);
+        feature.set('isFirst', index === highlightedIndex);
+        return feature;
+      }),
     });
 
     const layer = new VectorLayer({
       source,
-      style: new Style({
-        stroke: new Stroke({
-          color: 'red',
-          width: 2,
-        }),
-      }),
+      style: (feature) => {
+        const isFirst = feature.get('isFirst');
+        return new Style({
+          stroke: new Stroke({
+            color: isFirst ? 'tomato' : 'orange',
+            width: 2,
+          }),
+        });
+      },
       properties: { name: 'FinalRowsLayer' },
     });
 
@@ -121,14 +168,14 @@ export class RowsGeneratorComponent {
     if (!coords) return;
 
     const pol = geometry instanceof Polygon
-      ? turf.polygon(coords as [number, number][][])
-      : turf.multiPolygon(coords as [number, number][][][]);
+      ? turf.polygon(coords as Coordinate[][])
+      : turf.multiPolygon(coords as Coordinate[][][]);
 
     let bboxPolygon = turf.bboxPolygon(turf.bbox(pol));
     bboxPolygon = turf.transformScale(bboxPolygon, scale ?? 1);
-    const bboxCoords = bboxPolygon.geometry.coordinates[0] as [number, number][];
+    const bboxCoords = bboxPolygon.geometry.coordinates[0] as Coordinate[];
     if (bboxCoords.length < 4) return;
-    const pivot = turf.centroid(bboxPolygon).geometry.coordinates as [number, number];
+    const pivot = turf.centroid(bboxPolygon).geometry.coordinates as Coordinate;
 
     this.sourceBbox.set(bboxCoords);
     this.pivot.set(pivot);
@@ -194,7 +241,7 @@ export class RowsGeneratorComponent {
     }
   }
 
-  private drawPreview(bboxOverride?: [number, number][], linesOverride?: any[], pivotOverride?: [number, number]) {
+  private drawPreview(bboxOverride?: Coordinate[], linesOverride?: TurfFeature<TurfLineString>[], pivotOverride?: Coordinate) {
     const bbox = bboxOverride || this.bbox();
     const lines = linesOverride || this.lines();
     const pivot = pivotOverride || this.pivot();
@@ -224,15 +271,15 @@ export class RowsGeneratorComponent {
     } else {
       this.rowLineFeatures.forEach((feature, i) => {
         (feature.getGeometry() as LineString).setCoordinates(
-          lines[i].geometry.coordinates.map((coord: any) => fromLonLat(coord))
+          lines[i].geometry.coordinates.map((coord: Coordinate) => fromLonLat(coord))
         );
       });
     }
   }
 
   // --- Перемещение bbox ---
-  private addBboxTranslate(): void {
-    if (this.unifiedTranslate) return; // только один раз
+  private addBboxTranslate() {
+    if (this.unifiedTranslate) return;
     this.unifiedTranslate = new Translate({
       features: new Collection([
         this.bboxFeature!,
@@ -244,37 +291,39 @@ export class RowsGeneratorComponent {
     this.unifiedTranslate.on('translateend', this.onBboxTranslateEnd.bind(this));
   }
 
-  private onBboxTranslateStart(evt: any) {
+  private onBboxTranslateStart() {
     this.dragStartBbox = this.sourceBbox();
     this.dragStartPivot = this.pivot();
   }
 
-  private onBboxTranslating(evt: any) {
-    if (!this.dragStartBbox || !this.dragStartPivot) return;
-    // Центр bboxFeature (lonlat)
-    const currentCenter = turf.centroid(turf.polygon([this.getCurrentBboxFromMap()])).geometry.coordinates as [number, number];
-    const startCenter = this.dragStartPivot;
-    const dx = currentCenter[0] - startCenter[0];
-    const dy = currentCenter[1] - startCenter[1];
-    // Сдвигаем исходный bbox и pivot
-    const movedBbox = this.dragStartBbox.map(([x, y]) => [x + dx, y + dy] as [number, number]);
-    const movedPivot: [number, number] = [this.dragStartPivot[0] + dx, this.dragStartPivot[1] + dy];
+  private calculateMovedBboxAndPivot() {
+    if (!this.dragStartBbox || !this.dragStartPivot) return null;
+
+    const currentCenter = turf.centroid(turf.polygon([this.getCurrentBboxFromMap()])).geometry.coordinates as Coordinate;
+    const dx = currentCenter[0] - this.dragStartPivot[0];
+    const dy = currentCenter[1] - this.dragStartPivot[1];
+
+    const movedBbox = this.dragStartBbox.map(([x, y]) => [x + dx, y + dy] as Coordinate);
+    const movedPivot: Coordinate = [this.dragStartPivot[0] + dx, this.dragStartPivot[1] + dy];
+
+    return { movedBbox, movedPivot };
+  }
+
+  private onBboxTranslating() {
+    if (!this.calculateMovedBboxAndPivot()) return;
+
+    const { movedBbox, movedPivot } = this.calculateMovedBboxAndPivot()!;
     // Ряды вычисляем из movedBbox и текущего angle
-    const rotatedBbox = turf.transformRotate(turf.polygon([movedBbox]), this.angle(), { pivot: movedPivot }).geometry.coordinates[0] as [number, number][];
+    const rotatedBbox = turf.transformRotate(turf.polygon([movedBbox]), this.angle(), { pivot: movedPivot }).geometry.coordinates[0] as Coordinate[];
     const lines = this.createLinesForBbox(movedBbox, this.generateRowsForm.value.step ?? 10)
       .map(line => turf.transformRotate(line, this.angle(), { pivot: movedPivot }));
     this.drawPreview(rotatedBbox, lines, movedPivot);
   }
 
-  private onBboxTranslateEnd(evt: any) {
-    if (!this.dragStartBbox || !this.dragStartPivot) return;
-    // Аналогично translating
-    const currentCenter = turf.centroid(turf.polygon([this.getCurrentBboxFromMap()])).geometry.coordinates as [number, number];
-    const startCenter = this.dragStartPivot;
-    const dx = currentCenter[0] - startCenter[0];
-    const dy = currentCenter[1] - startCenter[1];
-    const movedBbox = this.dragStartBbox.map(([x, y]) => [x + dx, y + dy] as [number, number]);
-    const movedPivot: [number, number] = [this.dragStartPivot[0] + dx, this.dragStartPivot[1] + dy];
+  private onBboxTranslateEnd() {
+    if (!this.calculateMovedBboxAndPivot()) return;
+
+    const { movedBbox, movedPivot } = this.calculateMovedBboxAndPivot()!;
     this.sourceBbox.set(movedBbox);
     this.pivot.set(movedPivot);
     this.drawPreview();
@@ -283,7 +332,7 @@ export class RowsGeneratorComponent {
   }
 
   // --- Вращение bbox ---
-  private addHandleRotateInteraction(): void {
+  private addHandleRotateInteraction() {
     if (this.handleRotateInteraction) {
       this.map()!.removeInteraction(this.handleRotateInteraction);
     }
@@ -324,7 +373,7 @@ export class RowsGeneratorComponent {
   }
 
   // --- Вспомогательные методы для вращения ---
-  private onTranslateStart(evt: any): void {
+  private onTranslateStart(evt: MapBrowserEvent<UIEvent>) {
     const pivot = this.pivot();
     if (!pivot) return;
     const pivot3857 = fromLonLat(pivot);
@@ -333,7 +382,7 @@ export class RowsGeneratorComponent {
     this.dragStartPreviewAngle = this.angle();
   }
 
-  private onTranslating(evt: any): void {
+  private onTranslating(evt: MapBrowserEvent<UIEvent>) {
     if (this.rotateTimeout || this.dragStartAngle === null) return;
     const pivot = this.pivot();
     if (!pivot) return;
@@ -354,15 +403,15 @@ export class RowsGeneratorComponent {
     }, 10);
   }
 
-  private onTranslateEnd(): void {
+  private onTranslateEnd() {
     this.generateRowsForm.get('angle')?.setValue(Math.round(this.angle()));
     this.dragStartAngle = null;
   }
 
   private createLinesForBbox(
-    bboxCoords: [number, number][],
+    bboxCoords: Coordinate[],
     step: number
-  ): any[] {
+  ): TurfFeature<TurfLineString>[] {
     // Пример генерации параллельных линий внутри bbox (можно заменить на свою логику)
     // Здесь просто создаются вертикальные линии с шагом step
     const [minX, minY] = bboxCoords.reduce(
@@ -374,7 +423,7 @@ export class RowsGeneratorComponent {
       [bboxCoords[0][0], bboxCoords[0][1]]
     );
 
-    const lines: any[] = [];
+    const lines: TurfFeature<TurfLineString>[] = [];
     let x = minX;
     while (x <= maxX) {
       lines.push(turf.lineString([
@@ -386,12 +435,12 @@ export class RowsGeneratorComponent {
     return lines;
   }
 
-  private getCurrentBboxFromMap(): [number, number][] {
+  private getCurrentBboxFromMap(): Coordinate[] {
     // Получаем bbox из карты (lonlat)
     const coords3857 = (this.bboxFeature!.getGeometry() as Polygon).getCoordinates()[0];
     return coords3857
       .map(coord => toLonLat(coord))
-      .filter((c): c is [number, number] => Array.isArray(c) && c.length === 2 && typeof c[0] === 'number' && typeof c[1] === 'number');
+      .filter((c): c is Coordinate => Array.isArray(c) && c.length === 2 && typeof c[0] === 'number' && typeof c[1] === 'number');
   }
 
   // --- Очистка ---
@@ -459,20 +508,20 @@ export class RowsGeneratorComponent {
     return stepKm / (111.32 * Math.cos(latRad));
   }
 
-  private createLineFeature(coordinates: any[]): Feature<LineString> {
+  private createLineFeature(coordinates: unknown[]): Feature<LineString> {
     return new Feature({
       geometry: new LineString(this.toLonLatCoordinates(coordinates)),
     });
   }
 
-  private toLonLatCoordinates(coordinates: any[]): any[] {
+  private toLonLatCoordinates(coordinates: any[]) {
     if (Array.isArray(coordinates) && Array.isArray(coordinates[0])) {
       return coordinates.map(coord => fromLonLat(coord));
     }
     return fromLonLat(coordinates);
   }
 
-  private validateGeometry(): GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon> | null {
+  private validateGeometry() {
     const geometry = this.geometry();
     if (!geometry || !(geometry instanceof Polygon || geometry instanceof MultiPolygon)) return null;
 
@@ -487,21 +536,50 @@ export class RowsGeneratorComponent {
       : turf.multiPolygon(coords as Coordinate[][][]);
   }
 
-  private clipRowsByPolygon(rows: any[], polygon: any): any[] {
-    const resultSegments: any[] = [];
-    rows.forEach(line => {
-      const split = turf.lineSplit(line, polygon);
+  private clipRowsByPolygon(
+    rows: TurfFeature<TurfLineString>[],
+    polygon: TurfFeature<TurfPolygon | TurfMultiPolygon>
+  ): TurfFeature<TurfLineString>[]
+  {
+    return rows.flatMap(line => {
+      const segments = this.getClippedSegments(line, polygon);
 
-      split.features.forEach(segment => {
-        const segmentLength = turf.length(segment, { units: 'meters' });
-        if (segmentLength > 0) {
-          const center = turf.along(segment, segmentLength / 2, { units: 'meters' });
-          if (turf.booleanPointInPolygon(center, polygon)) {
-            resultSegments.push(segment);
-          }
-        }
-      });
+      if (segments.length > 0) {
+        return segments;
+      }
+
+      if (this.isLineCenterInsidePolygon(line, polygon)) {
+        return [line];
+      }
+
+      return [];
     });
-    return resultSegments;
   }
+
+  private getClippedSegments(line: TurfFeature<TurfLineString>, polygon: TurfFeature<TurfPolygon | TurfMultiPolygon>): TurfFeature<TurfLineString>[] {
+    const result: TurfFeature<TurfLineString>[] = [];
+    const segments = turf.lineSplit(line, polygon).features;
+
+    for (const segment of segments) {
+      if (this.isSegmentInsidePolygon(segment, polygon)) {
+        result.push(segment);
+      }
+    }
+
+    return result;
+  }
+
+  private isSegmentInsidePolygon(segment: TurfFeature<TurfLineString>, polygon: TurfFeature<TurfPolygon | TurfMultiPolygon>): boolean {
+    const length = turf.length(segment, { units: 'meters' });
+    if (length === 0) return false;
+
+    const midpoint = turf.along(segment, length / 2, { units: 'meters' });
+    return turf.booleanPointInPolygon(midpoint, polygon, { ignoreBoundary: false });
+  }
+
+  private isLineCenterInsidePolygon(line: TurfFeature<TurfLineString>, polygon: TurfFeature<TurfPolygon | TurfMultiPolygon>): boolean {
+    const mid = turf.along(line, turf.length(line, { units: 'meters' }) / 2, { units: 'meters' });
+    return turf.booleanPointInPolygon(mid, polygon, { ignoreBoundary: false });
+  }
+
 }

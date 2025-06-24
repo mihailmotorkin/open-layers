@@ -11,8 +11,22 @@
         <input formControlName="angle" type="number" min="0" max="360">
       </label>
       <label>
-        Масштаб (1 по умолчанию)
-        <input formControlName="scale" type="number" min="0.1" step="0.1">
+        Масштаб (по умолчанию 1)
+        <input formControlName="scale" type="number" min="1" step="0.1">
+      </label>
+
+      @if (generateRowsForm.touched && generateRowsForm.invalid) {
+        <small class="form-validation">Масштаб не должен быть меньше 1</small>
+      }
+
+      <label>
+        Направление нумерации
+        <select formControlName="direction">
+          <option value="left-to-right">Слева направо</option>
+          <option value="right-to-left">Справа налево</option>
+          <option value="top-to-bottom">Сверху вниз</option>
+          <option value="bottom-to-top">Снизу вверх</option>
+        </select>
       </label>
     </div>
     <div class="buttons">

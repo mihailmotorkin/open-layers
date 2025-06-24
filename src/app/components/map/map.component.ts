@@ -55,7 +55,7 @@ export class MapComponent implements OnInit, AfterViewInit {
   protected helpVectorSource = new VectorSource();
   protected lineVectorSource = new VectorSource();
   protected polygonVectorSource = new VectorSource();
-  private generatedPointsVectorSource = new VectorSource();
+  generatedPointsVectorSource = new VectorSource();
 
   get mapInstance() {
     return this.map;
@@ -69,12 +69,12 @@ export class MapComponent implements OnInit, AfterViewInit {
     });
   }
 
-  ngAfterViewInit(): void {
+  ngAfterViewInit() {
     this.initMap();
     this.map.on('singleclick', (event) => this.selectFeature(event.pixel));
   }
 
-  private initMap(): void {
+  private initMap() {
     this.map = new Map({
       target: this.mapElement()!.nativeElement,
       layers: [
@@ -137,10 +137,11 @@ export class MapComponent implements OnInit, AfterViewInit {
           source: this.generatedPointsVectorSource,
           style: new Style({
             image: new Circle({
-              radius: 3,
+              radius: 5,
               fill: new Fill({color: 'yellow'}),
             }),
           }),
+          zIndex: 10
         })
       ],
       view: new View({
@@ -227,20 +228,29 @@ export class MapComponent implements OnInit, AfterViewInit {
     });
   }
 
-  deleteFeature(feature: Feature) {
+  private deleteFeature(feature: Feature) {
     if (!this.mapInstance) return;
 
-    const layers = this.mapInstance.getLayers().getArray();
+    if (feature.get('pointId')) {
+      this.generatedPointsVectorSource.removeFeature(feature);
+      return;
+    }
 
+    const lineId = feature.getId();
+    const points = this.generatedPointsVectorSource.getFeatures();
+    const pointsToRemove = points.filter(p => p.get('parentLineId') === lineId);
+    this.generatedPointsVectorSource.removeFeatures(pointsToRemove);
+
+    const layers = this.mapInstance.getLayers().getArray();
     for (const layer of layers) {
       if (!(layer instanceof VectorLayer)) continue;
 
       const source = layer.getSource();
-      const features = source.getFeatures();
-
-      if (features.includes(feature)) {
+      if (source.getFeatures().includes(feature)) {
         source.removeFeature(feature);
-        if (source.getFeatures().length === 0) this.mapInstance.removeLayer(layer);
+        if (source.getFeatures().length === 0) {
+          this.mapInstance.removeLayer(layer);
+        }
       }
     }
   }
