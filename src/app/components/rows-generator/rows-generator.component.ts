@@ -8,7 +8,7 @@ import { fromLonLat, toLonLat } from 'ol/proj';
 import VectorLayer from 'ol/layer/Vector';
 import VectorSource from 'ol/source/Vector';
 import { Circle, Fill, Stroke, Style } from 'ol/style';
-import { Translate } from 'ol/interaction';
+import { MouseWheelZoom, Translate } from 'ol/interaction';
 import Collection from 'ol/Collection';
 import PointerInteraction from 'ol/interaction/Pointer';
 import type {
@@ -43,6 +43,7 @@ export class RowsGeneratorComponent {
   private dragStartAngle: number | null = null;
   private dragStartPreviewAngle: number = 0;
   private rotateTimeout: any = null;
+  private wheelZoomInteraction: any = null;
 
   private dragStartBbox: Coordinate[] | null = null;
   private dragStartPivot: Coordinate | null = null;
@@ -186,6 +187,16 @@ export class RowsGeneratorComponent {
     this.addHandleRotateInteraction();
     this.addBboxTranslate();
     this.drawPreview();
+
+    const interactions = this.map()!.getInteractions().getArray();
+    this.wheelZoomInteraction = interactions.find(i => i instanceof MouseWheelZoom);
+
+    if (this.wheelZoomInteraction) {
+      this.wheelZoomInteraction.setActive(false);
+    }
+
+    this.map()?.getViewport().addEventListener('wheel', this.onMouseOverMap, { passive: false });
+
   }
 
   private initPreviewFeaturesAndLayers() {
@@ -470,6 +481,12 @@ export class RowsGeneratorComponent {
     this.map()!.getLayers().getArray()
       .filter(l => l instanceof VectorLayer && l.get('name') === 'FinalRowsLayer')
       .forEach(l => this.map()!.removeLayer(l));
+
+    this.map()?.getViewport().removeEventListener('wheel', this.onMouseOverMap);
+    if (this.wheelZoomInteraction) {
+      this.wheelZoomInteraction.setActive(true);
+      this.wheelZoomInteraction = null;
+    }
   }
 
   private closeAndValidateRing(ring: Coordinate[]): Coordinate[] | null {
@@ -581,5 +598,42 @@ export class RowsGeneratorComponent {
     const mid = turf.along(line, turf.length(line, { units: 'meters' }) / 2, { units: 'meters' });
     return turf.booleanPointInPolygon(mid, polygon, { ignoreBoundary: false });
   }
+
+  private onBboxScale = (event: WheelEvent) => {
+    if (!this.sourceBbox() || !this.pivot) return;
+
+    const scaleControl = this.generateRowsForm.get('scale');
+    if (!scaleControl) return;
+
+    const currentScale = scaleControl.value ?? 1;
+    const delta = -event.deltaY * 0.001;
+    let newScale = Math.max(1, currentScale + delta);
+    newScale = Math.round(newScale * 100) / 100;
+    scaleControl.setValue(newScale, { emitEvent: false });
+
+    this.generatePreview(
+      this.generateRowsForm.value.step ?? 10,
+      this.generateRowsForm.value.angle ?? 0,
+      newScale
+    );
+  }
+
+  onMouseOverMap = (event: WheelEvent) => {
+    if (!this.bboxFeature || !this.map()) return;
+
+    const pixel = this.map()!.getEventPixel(event);
+    const coordinate = this.map()!.getCoordinateFromPixel(pixel);
+    const geometry = this.bboxFeature.getGeometry();
+
+    const inside = geometry?.intersectsCoordinate(coordinate) ?? false;
+
+    if (inside) {
+      event.preventDefault();
+      this.wheelZoomInteraction?.setActive(false);
+      this.onBboxScale(event);
+    } else {
+      this.wheelZoomInteraction?.setActive(true);
+    }
+  };
 
 }
