@@ -48,12 +48,10 @@ export class RowsGeneratorComponent {
   private dragStartBbox: Coordinate[] | null = null;
   private dragStartPivot: Coordinate | null = null;
 
-  // Единый источник правды
   private sourceBbox = signal<Coordinate[] | null>(null);
   private pivot = signal<Coordinate | null>(null);
   private angle = signal<number>(0);
 
-  // Вычисляемые значения
   private bbox = computed(() => {
     const src = this.sourceBbox();
     const a = this.angle();
@@ -182,7 +180,6 @@ export class RowsGeneratorComponent {
     this.pivot.set(pivot);
     this.angle.set(angle);
 
-    // Создаём features и слои только один раз
     this.initPreviewFeaturesAndLayers();
     this.addHandleRotateInteraction();
     this.addBboxTranslate();
@@ -200,24 +197,22 @@ export class RowsGeneratorComponent {
   }
 
   private initPreviewFeaturesAndLayers() {
-    // bbox feature
     if (!this.bboxFeature) {
       this.bboxFeature = new Feature({
         geometry: new Polygon([[[0, 0], [0, 0], [0, 0], [0, 0]]])
       });
     }
-    // handle feature
+
     if (!this.handleFeature) {
       this.handleFeature = new Feature({
         geometry: new Point([0, 0])
       });
     }
-    // линии features
+
     if (!this.rowLineFeatures || this.rowLineFeatures.length === 0) {
       this.rowLineFeatures = [];
-      // создаём пустые features, потом обновим геометрию
     }
-    // слои
+
     if (!this.bboxPreviewLayer) {
       this.bboxPreviewLayer = new VectorLayer({
         source: new VectorSource({ features: [this.bboxFeature] }),
@@ -228,6 +223,7 @@ export class RowsGeneratorComponent {
       });
       this.map()!.addLayer(this.bboxPreviewLayer);
     }
+
     if (!this.handleLayer) {
       this.handleLayer = new VectorLayer({
         source: new VectorSource({ features: [this.handleFeature] }),
@@ -241,6 +237,7 @@ export class RowsGeneratorComponent {
       });
       this.map()!.addLayer(this.handleLayer);
     }
+
     if (!this.rowsPreviewLayer) {
       this.rowsPreviewLayer = new VectorLayer({
         source: new VectorSource({ features: this.rowLineFeatures }),
@@ -257,18 +254,18 @@ export class RowsGeneratorComponent {
     const lines = linesOverride || this.lines();
     const pivot = pivotOverride || this.pivot();
     if (!bbox || !lines || !pivot) return;
-    // bbox
+
     if (this.bboxFeature) {
       (this.bboxFeature.getGeometry() as Polygon).setCoordinates([
         bbox.map(coord => fromLonLat(coord))
       ]);
     }
-    // handle
+
     if (this.handleFeature) {
       const handleCoord = bbox[1];
       (this.handleFeature.getGeometry() as Point).setCoordinates(fromLonLat(handleCoord));
     }
-    // lines
+
     if (this.rowLineFeatures.length !== lines.length) {
       this.rowLineFeatures = lines.map(line =>
         new Feature({
@@ -288,7 +285,7 @@ export class RowsGeneratorComponent {
     }
   }
 
-  // --- Перемещение bbox ---
+  // Перемещение bbox
   private addBboxTranslate() {
     if (this.unifiedTranslate) return;
     this.unifiedTranslate = new Translate({
@@ -324,7 +321,7 @@ export class RowsGeneratorComponent {
     if (!this.calculateMovedBboxAndPivot()) return;
 
     const { movedBbox, movedPivot } = this.calculateMovedBboxAndPivot()!;
-    // Ряды вычисляем из movedBbox и текущего angle
+
     const rotatedBbox = turf.transformRotate(turf.polygon([movedBbox]), this.angle(), { pivot: movedPivot }).geometry.coordinates[0] as Coordinate[];
     const lines = this.createLinesForBbox(movedBbox, this.generateRowsForm.value.step ?? 10)
       .map(line => turf.transformRotate(line, this.angle(), { pivot: movedPivot }));
@@ -342,7 +339,7 @@ export class RowsGeneratorComponent {
     this.dragStartPivot = null;
   }
 
-  // --- Вращение bbox ---
+  // Вращение bbox
   private addHandleRotateInteraction() {
     if (this.handleRotateInteraction) {
       this.map()!.removeInteraction(this.handleRotateInteraction);
@@ -383,7 +380,7 @@ export class RowsGeneratorComponent {
     this.drawPreview();
   }
 
-  // --- Вспомогательные методы для вращения ---
+  // Вспомогательные методы для вращения
   private onTranslateStart(evt: MapBrowserEvent<UIEvent>) {
     const pivot = this.pivot();
     if (!pivot) return;
@@ -423,8 +420,7 @@ export class RowsGeneratorComponent {
     bboxCoords: Coordinate[],
     step: number
   ): TurfFeature<TurfLineString>[] {
-    // Пример генерации параллельных линий внутри bbox (можно заменить на свою логику)
-    // Здесь просто создаются вертикальные линии с шагом step
+    // Здесь создаются вертикальные линии с шагом
     const [minX, minY] = bboxCoords.reduce(
       ([minX, minY], [x, y]) => [Math.min(minX, x), Math.min(minY, y)],
       [bboxCoords[0][0], bboxCoords[0][1]]
@@ -447,14 +443,13 @@ export class RowsGeneratorComponent {
   }
 
   private getCurrentBboxFromMap(): Coordinate[] {
-    // Получаем bbox из карты (lonlat)
-    const coords3857 = (this.bboxFeature!.getGeometry() as Polygon).getCoordinates()[0];
-    return coords3857
+    const currentBbox = (this.bboxFeature!.getGeometry() as Polygon).getCoordinates()[0];
+    return currentBbox
       .map(coord => toLonLat(coord))
       .filter((c): c is Coordinate => Array.isArray(c) && c.length === 2 && typeof c[0] === 'number' && typeof c[1] === 'number');
   }
 
-  // --- Очистка ---
+  // Очистка
   private clearPreviewLayersAndInteractions() {
     if (this.rowsPreviewLayer) this.map()!.removeLayer(this.rowsPreviewLayer);
     if (this.bboxPreviewLayer) this.map()!.removeLayer(this.bboxPreviewLayer);
@@ -477,7 +472,7 @@ export class RowsGeneratorComponent {
   private resetAll() {
     this.clearPreviewLayersAndInteractions();
     this.resetPreviewState();
-    // Удаляем итоговые слои
+
     this.map()!.getLayers().getArray()
       .filter(l => l instanceof VectorLayer && l.get('name') === 'FinalRowsLayer')
       .forEach(l => this.map()!.removeLayer(l));
@@ -553,6 +548,7 @@ export class RowsGeneratorComponent {
       : turf.multiPolygon(coords as Coordinate[][][]);
   }
 
+  // Обрезка рядов по границе полигона
   private clipRowsByPolygon(
     rows: TurfFeature<TurfLineString>[],
     polygon: TurfFeature<TurfPolygon | TurfMultiPolygon>
@@ -599,6 +595,7 @@ export class RowsGeneratorComponent {
     return turf.booleanPointInPolygon(mid, polygon, { ignoreBoundary: false });
   }
 
+  // Скейл bbox в режиме предпросмотра
   private onBboxScale = (event: WheelEvent) => {
     if (!this.sourceBbox() || !this.pivot) return;
 
