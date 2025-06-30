@@ -68,9 +68,7 @@
           },
           "defaultConfiguration": "development",
           "options": {
-            "ssl": true,
-            "sslCert": "./cert/localhost.crt",
-            "sslKey": "./cert/localhost.key"
+            "ssl": true
           }
         },
         "extract-i18n": {
